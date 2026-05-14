@@ -41,7 +41,7 @@ public class UserUseCase implements UserInputPort {
         if (userRepository.existsByUsername(req.getUsername()))
             throw new DuplicateIdentificationException("Username already taken: " + req.getUsername());
 
-        // Validate age
+        
         if (req.getBirthDate() != null && Period.between(req.getBirthDate(), LocalDate.now()).getYears() < 18)
             throw new IllegalArgumentException("Client must be at least 18 years old");
 
