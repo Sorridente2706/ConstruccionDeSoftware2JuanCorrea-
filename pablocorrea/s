@@ -1,1 +1,569 @@
-} 
+# Guía de consumo de la API — Bank Management
+
+Documento de referencia para probar todos los endpoints de la API desde Postman.
+
+---
+
+## 1. Configuración inicial en Postman
+
+### Crear la colección y las variables
+
+1. Abre Postman → **New** → **Collection** → nómbrala `Bank Management API`.
+2. Click derecho sobre la colección → **Edit** → pestaña **Variables**.
+3. Agrega estas variables:
+
+| Variable | Initial Value          | Current Value           |
+|----------|------------------------|-------------------------|
+| baseUrl  | `http://localhost:8080`| `http://localhost:8080` |
+| token    | (vacío)                | (vacío)                 |
+
+Así, en cualquier request puedes escribir `{{baseUrl}}/api/auth/login` en vez de la URL completa, y `{{token}}` en el header de autorización.
+
+### Configurar autorización a nivel de colección
+
+1. En la colección → pestaña **Authorization** → **Type: Bearer Token** → en el campo Token escribe `{{token}}`.
+2. Cada request que crees dentro heredará esta autorización automáticamente. Para los endpoints públicos (login y registro), en la pestaña Authorization del request individual elige **Type: No Auth**.
+
+### Headers comunes a todos los requests con body
+
+```
+Content-Type: application/json
+```
+
+---
+
+## 2. Flujo general
+
+```
+1. Registrar cliente (público)
+2. (Opcional) Promover usuario a empleado/analista vía SQL  
+3. Login → recibir token JWT
+4. Guardar token en la variable {{token}} de la colección
+5. Usar endpoints protegidos enviando el header: Authorization: Bearer {{token}}
+```
+
+El token vence en 24 horas (definido en `app.jwt.expiration`). Cuando expire, vuelve a hacer login.
+
+### Tip para guardar el token automáticamente
+
+En el request de login, ve a la pestaña **Tests** y pega:
+
+```javascript
+const response = pm.response.json();
+if (response.success && response.data && response.data.token) {
+    pm.collectionVariables.set("token", response.data.token);
+    console.log("Token guardado:", response.data.token);
+}
+```
+
+Así cada vez que ejecutes el login, la variable `{{token}}` se actualiza sola.
+
+---
+
+## 3. Endpoints públicos (sin autenticación)
+
+### 3.1 Registrar persona natural
+
+**POST** `{{baseUrl}}/api/users/register/natural-person`
+
+Body:
+
+```json
+{
+  "fullName": "Juan Pérez",
+  "identificationNumber": "1234567890",
+  "email": "juan@example.com",
+  "phone": "3001234567",
+  "birthDate": "1995-05-20",
+  "address": "Calle 10 #20-30, Medellín",
+  "username": "juanperez",
+  "password": "secret123"
+}
+```
+
+Respuesta esperada (201 Created):
+
+```json
+{
+  "success": true,
+  "message": "Natural person registered successfully",
+  "data": {
+    "id": 1,
+    "fullName": "Juan Pérez",
+    "identificationNumber": "1234567890",
+    "email": "juan@example.com",
+    "phone": "3001234567",
+    "birthDate": "1995-05-20",
+    "address": "Calle 10 #20-30, Medellín",
+    "username": "juanperez"
+  }
+}
+```
+
+Se guarda en las tablas `users` (credenciales + rol `NATURAL_PERSON_CLIENT`) y `natural_person_clients`.
+
+### 3.2 Registrar empresa
+
+**POST** `{{baseUrl}}/api/users/register/company`
+
+Body:
+
+```json
+{
+  "legalName": "ACME S.A.S.",
+  "taxId": "900123456-7",
+  "email": "contacto@acme.com",
+  "phone": "6041234567",
+  "address": "Carrera 50 #10-20, Medellín",
+  "legalRepresentativeId": "1234567890",
+  "username": "acme",
+  "password": "secret123"
+}
+```
+
+Se guarda en `users` (rol `COMPANY_CLIENT`) y `company_clients`.
+
+### 3.3 Login
+
+**POST** `{{baseUrl}}/api/auth/login`
+
+Body:
+
+```json
+{
+  "username": "juanperez",
+  "password": "secret123"
+}
+```
+
+Respuesta:
+
+```json
+{
+  "success": true,
+  "message": "Login successful",
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiTkFUVVJBTF9QRVJTT05fQ0xJRU5UIi...",
+    "username": "juanperez",
+    "role": "NATURAL_PERSON_CLIENT",
+    "userId": 1
+  }
+}
+```
+
+Copia el valor del campo `token` y pégalo en la variable `{{token}}` de la colección (o usa el script de Tests del paso 2 para que se guarde solo).
+
+---
+
+## 4. Crear usuarios con roles especiales (vía SQL)
+
+La API solo permite registrar clientes. Para probar endpoints de empleados, analistas o supervisores tienes dos opciones:
+
+### Opción A: Promover un cliente existente
+
+Conéctate a MySQL:
+
+```
+"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u banco_user -p
+```
+
+Y ejecuta:
+
+```sql
+USE banco_db;
+UPDATE users SET role = 'INTERNAL_ANALYST' WHERE username = 'juanperez';
+```
+
+Roles disponibles:
+- `NATURAL_PERSON_CLIENT` — cliente persona natural
+- `COMPANY_CLIENT` — cliente empresa  
+- `TELLER_EMPLOYEE` — cajero
+- `COMMERCIAL_EMPLOYEE` — empleado comercial
+- `COMPANY_EMPLOYEE` — empleado de empresa cliente
+- `COMPANY_SUPERVISOR` — supervisor de empresa cliente
+- `INTERNAL_ANALYST` — analista interno (el más poderoso)
+
+Después de cambiar el rol, **haz login otra vez** para obtener un token con el nuevo rol.
+
+### Opción B: Crear un usuario directamente con la contraseña hasheada
+
+Spring guarda la contraseña con BCrypt. No puedes insertar texto plano. Lo más fácil es:
+
+1. Registrar al usuario por el endpoint normal con el rol cliente.
+2. Actualizar su rol con UPDATE.
+
+---
+
+## 5. Endpoints protegidos (requieren token)
+
+Configura el header en cada request:
+
+```
+Authorization: Bearer {{token}}
+```
+
+O usa la herencia desde la colección (paso 1).
+
+### 5.1 Cuentas bancarias
+
+#### Abrir cuenta
+
+**POST** `{{baseUrl}}/api/accounts`  
+**Roles permitidos:** `TELLER_EMPLOYEE`, `COMMERCIAL_EMPLOYEE`, `INTERNAL_ANALYST`
+
+Body:
+
+```json
+{
+  "ownerId": "1234567890",
+  "accountType": "SAVINGS",
+  "currency": "COP"
+}
+```
+
+`accountType` puede ser: `SAVINGS`, `CHECKING`, `PERSONAL`, `CORPORATE`.  
+`ownerId` es el `identificationNumber` del cliente (persona natural) o `taxId` (empresa).
+
+Respuesta:
+
+```json
+{
+  "success": true,
+  "message": "Account opened successfully",
+  "data": {
+    "id": 1,
+    "accountNumber": "1000000001",
+    "accountType": "SAVINGS",
+    "ownerId": "1234567890",
+    "balance": 0,
+    "currency": "COP",
+    "status": "ACTIVE",
+    "openingDate": "2026-05-12"
+  }
+}
+```
+
+Guarda el `accountNumber`, lo necesitarás para transferencias.
+
+#### Ver cuenta por número
+
+**GET** `{{baseUrl}}/api/accounts/1000000001`  
+**Roles:** todos excepto sin autenticación.
+
+#### Ver cuentas de un dueño
+
+**GET** `{{baseUrl}}/api/accounts/owner/1234567890`  
+**Roles:** todos los autenticados.
+
+---
+
+### 5.2 Transferencias
+
+#### Crear transferencia
+
+**POST** `{{baseUrl}}/api/transfers`  
+**Roles:** `NATURAL_PERSON_CLIENT`, `COMPANY_EMPLOYEE`, `COMPANY_SUPERVISOR`
+
+Body:
+
+```json
+{
+  "sourceAccountNumber": "1000000001",
+  "destinationAccountNumber": "1000000002",
+  "amount": 50000,
+  "currency": "COP"
+}
+```
+
+Si el monto es ≥ `app.transfer.approval.threshold` (10,000 por defecto, configurado en `application.properties`), la transferencia queda en estado **PENDING** esperando aprobación. Si es menor, probablemente se ejecuta directo.
+
+Respuesta:
+
+```json
+{
+  "success": true,
+  "message": "Transfer created",
+  "data": {
+    "id": 1,
+    "sourceAccountNumber": "1000000001",
+    "destinationAccountNumber": "1000000002",
+    "amount": 50000,
+    "currency": "COP",
+    "createdAt": "2026-05-12T10:30:00",
+    "approvedAt": null,
+    "status": "PENDING",
+    "creatorUserId": 1,
+    "approverUserId": null
+  }
+}
+```
+
+#### Aprobar transferencia
+
+**PUT** `{{baseUrl}}/api/transfers/1/approve`  
+**Solo rol:** `COMPANY_SUPERVISOR`  
+Sin body.
+
+#### Rechazar transferencia
+
+**PUT** `{{baseUrl}}/api/transfers/1/reject`  
+**Solo rol:** `COMPANY_SUPERVISOR`  
+Sin body.
+
+#### Ver transferencia
+
+**GET** `{{baseUrl}}/api/transfers/1`  
+**Roles:** `COMPANY_SUPERVISOR`, `COMPANY_EMPLOYEE`, `INTERNAL_ANALYST`, `NATURAL_PERSON_CLIENT`
+
+#### Ver transferencias pendientes
+
+**GET** `{{baseUrl}}/api/transfers/pending`  
+**Roles:** `COMPANY_SUPERVISOR`, `INTERNAL_ANALYST`
+
+---
+
+### 5.3 Préstamos
+
+#### Solicitar préstamo
+
+**POST** `{{baseUrl}}/api/loans`  
+**Roles:** `NATURAL_PERSON_CLIENT`, `COMPANY_CLIENT`, `COMMERCIAL_EMPLOYEE`
+
+Body:
+
+```json
+{
+  "clientId": "1234567890",
+  "loanType": "PERSONAL",
+  "requestedAmount": 5000000,
+  "currency": "COP",
+  "termMonths": 24
+}
+```
+
+#### Aprobar préstamo
+
+**PUT** `{{baseUrl}}/api/loans/1/approve`  
+**Solo rol:** `INTERNAL_ANALYST`
+
+Body:
+
+```json
+{
+  "approvedAmount": 5000000,
+  "currency": "COP",
+  "interestRate": 1.8
+}
+```
+
+#### Rechazar préstamo
+
+**PUT** `{{baseUrl}}/api/loans/1/reject`  
+**Solo rol:** `INTERNAL_ANALYST`  
+Sin body.
+
+#### Desembolsar préstamo
+
+**PUT** `{{baseUrl}}/api/loans/1/disburse`  
+**Solo rol:** `INTERNAL_ANALYST`
+
+Body:
+
+```json
+{
+  "disbursementAccountNumber": "1000000001"
+}
+```
+
+El préstamo debe estar **aprobado** antes de desembolsar.
+
+#### Ver préstamo
+
+**GET** `{{baseUrl}}/api/loans/1`  
+**Roles:** `INTERNAL_ANALYST`, `COMMERCIAL_EMPLOYEE`, `NATURAL_PERSON_CLIENT`, `COMPANY_CLIENT`
+
+#### Ver préstamos por cliente
+
+**GET** `{{baseUrl}}/api/loans/client/1234567890`  
+**Roles:** mismos que el anterior.
+
+---
+
+### 5.4 Usuarios
+
+#### Ver usuario por ID
+
+**GET** `{{baseUrl}}/api/users/1`  
+**Roles:** `INTERNAL_ANALYST`, `TELLER_EMPLOYEE`, `COMMERCIAL_EMPLOYEE`
+
+---
+
+## 6. Matriz de permisos por rol
+
+| Endpoint                          | NAT_CLIENT | COMP_CLIENT | TELLER | COMM_EMP | COMP_EMP | COMP_SUP | INTERNAL_ANALYST |
+|-----------------------------------|:----------:|:-----------:|:------:|:--------:|:--------:|:--------:|:----------------:|
+| POST /api/accounts                |            |             |   ✅   |   ✅     |          |          |       ✅         |
+| GET /api/accounts/{num}           |    ✅      |    ✅       |   ✅   |   ✅     |   ✅     |   ✅     |       ✅         |
+| GET /api/accounts/owner/{id}      |    ✅      |    ✅       |   ✅   |   ✅     |   ✅     |   ✅     |       ✅         |
+| POST /api/transfers               |    ✅      |             |        |          |   ✅     |   ✅     |                  |
+| PUT /api/transfers/{id}/approve   |            |             |        |          |          |   ✅     |                  |
+| PUT /api/transfers/{id}/reject    |            |             |        |          |          |   ✅     |                  |
+| GET /api/transfers/{id}           |    ✅      |             |        |          |   ✅     |   ✅     |       ✅         |
+| GET /api/transfers/pending        |            |             |        |          |          |   ✅     |       ✅         |
+| POST /api/loans                   |    ✅      |    ✅       |        |   ✅     |          |          |                  |
+| PUT /api/loans/{id}/approve       |            |             |        |          |          |          |       ✅         |
+| PUT /api/loans/{id}/reject        |            |             |        |          |          |          |       ✅         |
+| PUT /api/loans/{id}/disburse      |            |             |        |          |          |          |       ✅         |
+| GET /api/loans/{id}               |    ✅      |    ✅       |        |   ✅     |          |          |       ✅         |
+| GET /api/loans/client/{id}        |    ✅      |    ✅       |        |   ✅     |          |          |       ✅         |
+| GET /api/users/{id}               |            |             |   ✅   |   ✅     |          |          |       ✅         |
+
+---
+
+## 7. Flujo de ejemplo completo (end-to-end)
+
+Caso: registrar cliente, abrir cuenta, hacer transferencia entre dos cuentas, solicitar préstamo y aprobarlo.
+
+### Paso 1: Registrar dos clientes naturales
+
+POST `/api/users/register/natural-person` dos veces con datos distintos (Juan y Ana).
+
+### Paso 2: Promover a Juan como analista interno
+
+```sql
+USE banco_db;
+UPDATE users SET role = 'INTERNAL_ANALYST' WHERE username = 'juanperez';
+```
+
+### Paso 3: Juan hace login
+
+POST `/api/auth/login` con credenciales de Juan → guardar token.
+
+### Paso 4: Juan (como INTERNAL_ANALYST) abre cuentas para sí mismo y para Ana
+
+```http
+POST /api/accounts
+{ "ownerId": "1234567890", "accountType": "SAVINGS", "currency": "COP" }
+
+POST /api/accounts  
+{ "ownerId": "0987654321", "accountType": "SAVINGS", "currency": "COP" }
+```
+
+Anota los `accountNumber` que devuelve (por ejemplo `1000000001` y `1000000002`).
+
+### Paso 5: Cargar saldo a la cuenta de Juan
+
+En la versión actual no hay endpoint de depósito visible — toca directo en MySQL:
+
+```sql
+UPDATE bank_accounts SET balance = 1000000 WHERE account_number = '1000000001';
+```
+
+### Paso 6: Ana hace login y transfiere a Juan
+
+Login con `ana` → con su token:
+
+```http
+POST /api/transfers
+{
+  "sourceAccountNumber": "1000000002",
+  "destinationAccountNumber": "1000000001", 
+  "amount": 5000,
+  "currency": "COP"
+}
+```
+
+### Paso 7: Juan solicita un préstamo (como cliente)
+
+Juan ahora es analista, así que para que solicite un préstamo como cliente, vuelve a hacer login con un usuario que sea cliente. O alternativamente, como analista, puedes consultar los préstamos pendientes.
+
+### Paso 8: Aprobar el préstamo
+
+```http
+PUT /api/loans/1/approve
+Authorization: Bearer (token de Juan-analista)
+
+{ "approvedAmount": 5000000, "currency": "COP", "interestRate": 1.8 }
+```
+
+### Paso 9: Desembolsar
+
+```http
+PUT /api/loans/1/disburse
+
+{ "disbursementAccountNumber": "1000000001" }
+```
+
+---
+
+## 8. Códigos de respuesta y errores comunes
+
+| Código | Significado            | Causa típica                                          |
+|--------|------------------------|-------------------------------------------------------|
+| 200    | OK                     | Operación exitosa                                     |
+| 201    | Created                | Recurso creado (registro, cuenta, transferencia)      |
+| 400    | Bad Request            | Body inválido o campos faltantes/mal formados         |
+| 401    | Unauthorized           | Token faltante, vencido o malformado                  |
+| 403    | Forbidden              | El rol del usuario no tiene acceso al endpoint        |
+| 404    | Not Found              | URL incorrecta o recurso inexistente                  |
+| 500    | Internal Server Error  | Excepción no controlada (revisar logs de la consola)  |
+
+### Errores que vas a ver seguro
+
+**"Access denied"** o **403**:  
+El usuario no tiene el rol requerido. Verifica con `SELECT role FROM users WHERE username='...'`.
+
+**"JWT expired"**:  
+Token caducó (24h). Vuelve a hacer login.
+
+**"Validation failed"** o **400** con detalles de campo:  
+Algún campo del body no cumple las validaciones (`@NotBlank`, `@Email`, `@Size`, etc.). Revisa el JSON y compara con los DTOs.
+
+**Token sin "ROLE_" prefix**:  
+Spring espera roles como `ROLE_XXX`. El filtro JWT (`JwtAuthFilter`) lo agrega automáticamente, no tienes que preocuparte por eso al hacer login. Pero si ves errores raros de autorización, revisa que el campo `role` en la tabla `users` esté en MAYÚSCULAS y coincida exactamente con uno de los valores del enum `UserRole`.
+
+---
+
+## 9. Consultas SQL útiles para depurar
+
+```sql
+USE banco_db;
+
+-- Ver todos los usuarios
+SELECT id, username, full_name, role, status FROM users;
+
+-- Ver todas las cuentas
+SELECT id, account_number, owner_id, balance, currency, status FROM bank_accounts;
+
+-- Ver transferencias
+SELECT id, source_account_number, destination_account_number, amount, status, created_at FROM transfers;
+
+-- Ver préstamos
+SELECT id, client_id, requested_amount, approved_amount, status FROM loans;
+
+-- Cambiar rol de un usuario
+UPDATE users SET role = 'INTERNAL_ANALYST' WHERE username = 'juanperez';
+
+-- Cargar saldo manualmente a una cuenta
+UPDATE bank_accounts SET balance = 1000000 WHERE account_number = '1000000001';
+
+-- Resetear todo (cuidado: borra los datos)
+TRUNCATE TABLE transfers;
+TRUNCATE TABLE loans;
+TRUNCATE TABLE bank_accounts;
+DELETE FROM natural_person_clients;
+DELETE FROM company_clients;
+DELETE FROM users;
+```
+
+---
+
+## 10. Resumen ultra-rápido
+
+1. Spring corriendo en `http://localhost:8080`.
+2. Registrarse en `/api/users/register/natural-person` o `/company`.
+3. Login en `/api/auth/login` → copiar el token.
+4. Mandar `Authorization: Bearer <token>` en todos los demás endpoints.
+5. Para roles especiales, hacer `UPDATE users SET role = '...'` en MySQL y volver a hacer login.
+
+Listo.
