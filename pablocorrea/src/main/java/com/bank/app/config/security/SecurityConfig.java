@@ -3,6 +3,7 @@ package com.bank.app.config.security;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -39,12 +40,15 @@ public class SecurityConfig {
                 // Clients and Commercial can request loans
                 .requestMatchers("/api/loans").hasAnyRole(
                     "NATURAL_PERSON_CLIENT", "COMPANY_CLIENT", "COMMERCIAL_EMPLOYEE", "INTERNAL_ANALYST")
+                // Company Employee can create transfers — POST específico primero
+                .requestMatchers(HttpMethod.POST, "/api/transfers").hasAnyRole(
+                    "COMPANY_EMPLOYEE", "COMPANY_SUPERVISOR", "NATURAL_PERSON_CLIENT", "INTERNAL_ANALYST")
                 // Only Company Supervisor can approve/reject transfers
                 .requestMatchers("/api/transfers/*/approve", "/api/transfers/*/reject")
-                    .hasRole("COMPANY_SUPERVISOR")
-                // Company Employee can create transfers
-                .requestMatchers("/api/transfers").hasAnyRole(
-                    "COMPANY_EMPLOYEE", "COMPANY_SUPERVISOR", "NATURAL_PERSON_CLIENT", "INTERNAL_ANALYST")
+                    .hasAnyRole("COMPANY_SUPERVISOR", "INTERNAL_ANALYST")
+                // GET transfers
+                .requestMatchers("/api/transfers/**").hasAnyRole(
+                    "COMPANY_SUPERVISOR", "COMPANY_EMPLOYEE", "INTERNAL_ANALYST", "NATURAL_PERSON_CLIENT")
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);

@@ -37,10 +37,15 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         final String jwt = authHeader.substring(7);
         try {
             final String username = jwtService.extractUsername(jwt);
+            System.out.println(">>> USERNAME EXTRAIDO: " + username);
             if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
                 userRepository.findByUsername(username).ifPresent(user -> {
-                    if (jwtService.isTokenValid(jwt, username) && user.isActive()) {
+                    boolean valid = jwtService.isTokenValid(jwt, username);
+                    boolean active = user.isActive();
+                    System.out.println(">>> isTokenValid: " + valid + " | isActive: " + active + " | user: " + username);
+                    if (valid && active) {
                         String role = "ROLE_" + user.getRole().name();
+                        System.out.println(">>> ROL ASIGNADO: " + role + " para usuario: " + username);
                         var authToken = new UsernamePasswordAuthenticationToken(
                                 username, null, List.of(new SimpleGrantedAuthority(role)));
                         authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
@@ -48,7 +53,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     }
                 });
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            System.out.println(">>> ERROR EN FILTRO: " + e.getMessage());
+        }
 
         filterChain.doFilter(request, response);
     }
